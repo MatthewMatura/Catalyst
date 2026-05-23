@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Catalyst — PLTR</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@700&family=DM+Sans:wght@400;500&family=DM+Mono:wght@400&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#08090d;color:#e0eaf4;font-family:'DM Sans',sans-serif;min-height:100vh;}
+    .card{background:#0d1117;border:1px solid #1a2030;cursor:pointer;transition:border-color .15s;margin-bottom:3px;border-radius:1px;}
+    .card:hover{border-color:#253040;}
+    .fade{animation:fi .18s ease;}
+    @keyframes fi{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+    .spin{animation:sp 1s linear infinite;}
+    @keyframes sp{to{transform:rotate(360deg)}}
+    a{color:#4a90e2;text-decoration:none;}
+    a:hover{text-decoration:underline;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const CIK     = "0001321655";
+const CIK_NUM = "1321655";
+
+const ITEM_LABELS = {
+  "1.01":"Material Agreement","1.02":"Agreement Terminated",
+  "2.01":"Asset Acquisition","2.02":"Earnings Results",
+  "2.05":"Exit/Restructuring Costs","2.06":"Material Impairment",
+  "3.01":"Delisting Notice","4.01":"Auditor Change","4.02":"Restatement",
+  "5.01":"Change of Control","5.02":"Director/Officer Change",
+  "5.07":"Shareholder Vote","7.01":"Regulation FD Disclosure",
+  "8.01":"Other Events","9.01":"Financial Statements",
+};
+
+const TW = [
+  {w:"contract",   why:"Contract wins directly drive Palantir revenue"},
+  {w:"award",      why:"Awards expand Palantir's recurring revenue base"},
+  {w:"agreement",  why:"New agreements add to contracted revenue"},
+  {w:"partner",    why:"Partnerships expand platform reach and distribution"},
+  {w:"growth",     why:"Revenue growth validates the commercial expansion thesis"},
+  {w:"record",     why:"Record metrics signal accelerating momentum"},
+  {w:"beat",       why:"Earnings beats support the premium valuation multiple"},
+  {w:"exceed",     why:"Outperformance versus expectations is bullish"},
+  {w:"deploy",     why:"Deployments validate real-world demand for Palantir's software"},
+  {w:"revenue",    why:"Revenue is the primary KPI for Palantir's growth story"},
+  {w:"profit",     why:"Profitability milestones support long-term valuation"},
+  {w:"federal",    why:"Federal government is Palantir's largest and most stable segment"},
+  {w:"government", why:"Government contracts provide high-margin recurring revenue"},
+  {w:"defense",    why:"Defense spending is a core and growing market"},
+  {w:"military",   why:"Military contracts are high-value and long-duration"},
+  {w:"ai",         why:"AI demand is the central thesis for Palantir's commercial inflection"},
+  {w:"renewal",    why:"Renewals demonstrate sticky, durable customer relationships"},
+  {w:"acqui",      why:"Acquisitions can expand capabilities or customer base"},
+  {w:"increas",    why:"Increasing metrics support the growth narrative"},
+  {w:"strong",     why:"Strong results reinforce the bull case"},
+  {w:"positive",   why:"Positive disclosures support investor sentiment"},
+  {w:"purchas",    why:"Purchases signal institutional or insider confidence"},
+];
+
+const HW = [
+  {w:"terminat",   why:"Contract terminations directly reduce Palantir's revenue base"},
+  {w:"investigat", why:"Investigations create regulatory uncertainty and headline risk"},
+  {w:"lawsuit",    why:"Litigation introduces financial liability and distraction"},
+  {w:"loss",       why:"Losses pressure the path-to-profitability narrative"},
+  {w:"miss",       why:"Earnings misses compress valuation multiples"},
+  {w:"declin",     why:"Declining metrics challenge the growth premium"},
+  {w:"downgrade",  why:"Downgrades can trigger institutional selling pressure"},
+  {w:"weak",       why:"Weak results threaten the premium multiple"},
+  {w:"layoff",     why:"Layoffs may signal cost pressure or slowing growth"},
+  {w:"impair",     why:"Impairments reduce book value and signal asset write-downs"},
+  {w:"resign",     why:"Executive departures create leadership uncertainty"},
+  {w:"probe",      why:"Government probes introduce regulatory and reputational risk"},
+  {w:"competit",   why:"Increased competition threatens market share and pricing power"},
+  {w:"restat",     why:"Restatements signal accounting issues and erode investor trust"},
+  {w:"concern",    why:"Expressed concerns are a caution signal"},
+  {w:"decreas",    why:"Decreasing metrics undermine the bull case"},
+  {w:"cut",        why:"Cuts to guidance or spending signal potential demand softness"},
+  {w:"sold",       why:"Insider selling can signal reduced near-term conviction"},
+  {w:"reduc",      why:"Reductions in key metrics challenge the growth narrative"},
+];
+
+function scoreText(text="") {
+  const low = text.toLowerCase();
+  const tw = TW.filter(k=>low.includes(k.w));
+  const hw = HW.filter(k=>low.includes(k.w));
+  const side = hw.length > tw.length ? "headwind" : "tailwind";
+  return {side, tw, hw};
+}
+
+function fmtDate(s) {
+  if (!s) return "";
+  try { return new Date(s).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); }
+  catch { return s; }
+}
+
+function timeAgo(s) {
+  if (!s) return "";
+  const d = Math.floor((Date.now()-new Date(s))/86400000);
+  if (d===0) return "Today";
+  if (d===1) return "Yesterday";
+  if (d<7)   return `${d}d ago`;
+  if (d<30)  return `${Math.floor(d/7)}w ago`;
+  if (d<365) return `${Math.floor(d/30)}mo ago`;
+  return `${Math.floor(d/365)}y ago`;
+}
+
+// Fetch index page for a filing and find the actual document URLs
+async function fetchFilingIndex(accFmt) {
+  try {
+    const r = await fetch(`https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/`);
+    const html = await r.text();
+    const doc = new DOMParser().parseFromString(html,"text/html");
+    const links = [...doc.querySelectorAll("a")].map(a=>a.href).filter(h=>h.includes(".htm")||h.includes(".txt"));
+    return links;
+  } catch { return []; }
+}
+
+// Fetch and extract readable paragraphs from an 8-K press release on EDGAR
+async function fetch8KText(accFmt, primaryDoc) {
+  try {
+    const url = `https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/${primaryDoc}`;
+    const r = await fetch(url);
+    const html = await r.text();
+    const doc = new DOMParser().parseFromString(html,"text/html");
+    // Remove boilerplate
+    ["style","script","table"].forEach(tag=>[...doc.querySelectorAll(tag)].forEach(el=>el.remove()));
+    const paras = [...doc.querySelectorAll("p,div")]
+      .map(el=>el.textContent.replace(/\s+/g," ").trim())
+      .filter(t=>
+        t.length>80 &&
+        t.length<2000 &&
+        !t.toLowerCase().includes("pursuant to") &&
+        !t.toLowerCase().includes("securities exchange act") &&
+        !t.toLowerCase().includes("forward-looking") &&
+        !t.toLowerCase().includes("safe harbor") &&
+        !t.toLowerCase().includes("risk factor") &&
+        !t.match(/^[\d\s\.\,\-]+$/)
+      )
+      .slice(0,5);
+    return paras.length ? paras : null;
+  } catch { return null; }
+}
+
+// Parse Form 4 XML from EDGAR directly
+async function parseForm4(acc, doc) {
+  try {
+    const accFmt = acc.replace(/-/g,"");
+    const r = await fetch(`https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/${doc}`);
+    const xml = new DOMParser().parseFromString(await r.text(),"text/xml");
+    const name  = xml.querySelector("rptOwnerName")?.textContent?.trim()||"Insider";
+    const title = xml.querySelector("officerTitle")?.textContent?.trim()||"";
+    const txns  = [...xml.querySelectorAll("nonDerivativeTransaction")].map(t=>{
+      const code   = t.querySelector("transactionAcquiredDisposedCode value")?.textContent?.trim();
+      const shares = parseFloat(t.querySelector("transactionShares value")?.textContent||"0");
+      const price  = parseFloat(t.querySelector("transactionPricePerShare value")?.textContent||"0");
+      const val    = shares*price;
+      return {
+        action: code==="D"?"Sold":"Bought",
+        shares: shares.toLocaleString("en-US",{maximumFractionDigits:0}),
+        price:  price>0?`$${price.toFixed(2)}`:"",
+        value:  val>1e4?`~$${(val/1e6).toFixed(2)}M`:"",
+        str:    `${code==="D"?"Sold":"Bought"} ${shares.toLocaleString("en-US",{maximumFractionDigits:0})} shares${price>0?` at $${price.toFixed(2)}`:""}${val>1e4?` (~$${(val/1e6).toFixed(2)}M)`:""}`
+      };
+    });
+    if (!txns.length) return null;
+    const post = xml.querySelector("sharesOwnedFollowingTransaction value")?.textContent;
+    const postShares = post ? parseFloat(post).toLocaleString() : null;
+    const side = txns.some(t=>t.action==="Sold") ? "headwind" : "tailwind";
+    return {name, title, txns, postShares, side};
+  } catch { return null; }
+}
+
+// Parse 13G/13D XML from EDGAR
+async function parse13G(accFmt, doc) {
+  try {
+    const r = await fetch(`https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/${doc}`);
+    const text = await r.text();
+    const xml = new DOMParser().parseFromString(text,"text/xml");
+    // Try structured XML first
+    const filerName   = xml.querySelector("filingManager name, filerInfo name")?.textContent?.trim();
+    const sharesEl    = xml.querySelector("shrsOrPrnAmt shs, shares")?.textContent?.trim();
+    const pctEl       = xml.querySelector("percentOfClass")?.textContent?.trim();
+    const soloEl      = xml.querySelector("sole")?.textContent?.trim();
+    const shares      = sharesEl ? parseFloat(sharesEl).toLocaleString() : null;
+    const pct         = pctEl ? `${pctEl}%` : null;
+    if (filerName||shares||pct) return {filerName, shares, pct, sole:soloEl};
+    return null;
+  } catch { return null; }
+}
+
+// Expanded panel — renders content based on filing type
+function ExpandedPanel({item}) {
+  const [fetching, setFetching] = useState(false);
+  const [content, setContent]   = useState(item.prefetched||null);
+
+  useEffect(()=>{
+    if (content||item.type!=="8k") return;
+    setFetching(true);
+    fetch8KText(item.accFmt, item.primaryDoc).then(paras=>{
+      setContent(paras);
+      setFetching(false);
+    });
+  },[]);
+
+  const {tw,hw} = scoreText((content||[]).join(" ")+" "+(item.description||"")+" "+(item.title||""));
+
+  return (
+    <div className="fade" onClick={e=>e.stopPropagation()} style={{marginTop:12,paddingTop:12,borderTop:"1px solid #0f1520"}}>
+
+      {fetching&&(
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+          <div className="spin" style={{width:10,height:10,border:"1px solid #1a2030",borderTopColor:"#c87020",borderRadius:"50%",flexShrink:0}}/>
+          <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060",letterSpacing:".08em"}}>READING FILING…</span>
+        </div>
+      )}
+
+      {/* 8-K press release text */}
+      {item.type==="8k" && content && content.map((p,i)=>(
+        <p key={i} style={{fontSize:13,color:"#8090a0",lineHeight:1.75,marginBottom:10}}>{p}</p>
+      ))}
+
+      {/* Form 4 insider trade breakdown */}
+      {item.type==="form4" && item.insider && (
+        <div style={{marginBottom:12}}>
+          <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#4a6070",letterSpacing:".12em",textTransform:"uppercase",marginBottom:8}}>Transaction Detail</div>
+          {item.insider.txns.map((t,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,padding:"8px 10px",background:"#06080d",border:"1px solid #0f1520",borderRadius:2}}>
+              <span style={{fontFamily:"'DM Mono'",fontSize:11,color:t.action==="Sold"?"#ff3057":"#00e5a0",fontWeight:500}}>{t.action.toUpperCase()}</span>
+              <span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#c0d0e0"}}>{t.shares} shares</span>
+              {t.price&&<span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#8090a0"}}>@ {t.price}</span>}
+              {t.value&&<span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#c0d0e0",marginLeft:"auto"}}>{t.value}</span>}
+            </div>
+          ))}
+          {item.insider.postShares&&(
+            <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#4a6070",marginTop:6}}>
+              Holds {item.insider.postShares} shares post-transaction
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 13G/13D institutional holder */}
+      {item.type==="13g" && item.institutional && (
+        <div style={{marginBottom:12,padding:"10px 12px",background:"#06080d",border:"1px solid #0f1520",borderRadius:2}}>
+          <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#4a6070",letterSpacing:".12em",textTransform:"uppercase",marginBottom:8}}>Holder Detail</div>
+          {item.institutional.filerName&&<div style={{fontSize:13,color:"#c0d0e0",marginBottom:4}}>{item.institutional.filerName}</div>}
+          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginTop:6}}>
+            {item.institutional.shares&&<div style={{fontFamily:"'DM Mono'",fontSize:11,color:"#8090a0"}}>Shares: <span style={{color:"#c0d0e0"}}>{item.institutional.shares}</span></div>}
+            {item.institutional.pct&&<div style={{fontFamily:"'DM Mono'",fontSize:11,color:"#8090a0"}}>Ownership: <span style={{color:"#c0d0e0"}}>{item.institutional.pct}</span></div>}
+          </div>
+        </div>
+      )}
+
+      {/* Generic description fallback */}
+      {!["8k","form4","13g"].includes(item.type) && item.description && (
+        <p style={{fontSize:13,color:"#8090a0",lineHeight:1.75,marginBottom:12}}>{item.description}</p>
+      )}
+
+      {/* Why it matters */}
+      {(tw.length>0||hw.length>0)&&(
+        <div style={{marginBottom:12,padding:"10px 12px",background:"#06080d",border:"1px solid #0f1520",borderRadius:2}}>
+          <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#4a6070",letterSpacing:".12em",textTransform:"uppercase",marginBottom:8}}>Why this matters for PLTR</div>
+          {tw.map((k,i)=>(
+            <div key={i} style={{display:"flex",gap:8,marginBottom:5,alignItems:"flex-start"}}>
+              <span style={{color:"#00e5a0",fontSize:10,fontFamily:"'DM Mono'",flexShrink:0,marginTop:2}}>▲</span>
+              <span style={{fontSize:12,color:"#8090a0",lineHeight:1.5}}>{k.why}</span>
+            </div>
+          ))}
+          {hw.map((k,i)=>(
+            <div key={i} style={{display:"flex",gap:8,marginBottom:5,alignItems:"flex-start"}}>
+              <span style={{color:"#ff3057",fontSize:10,fontFamily:"'DM Mono'",flexShrink:0,marginTop:2}}>▼</span>
+              <span style={{fontSize:12,color:"#8090a0",lineHeight:1.5}}>{k.why}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Links */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+        {item.links?.map((l,i)=>(
+          <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
+            style={{fontFamily:"'DM Mono'",fontSize:10,color:"#4a90e2",border:"1px solid #1a3060",padding:"4px 10px",borderRadius:2}}>
+            {l.text}
+          </a>
+        ))}
+        <span style={{marginLeft:"auto",fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060"}}>{fmtDate(item.date)}</span>
+      </div>
+    </div>
+  );
+}
+
+function Card({item, expanded, onToggle}) {
+  const isT = item.side==="tailwind";
+  const accent = isT?"#00e5a0":"#ff3057";
+  return (
+    <div className="card" onClick={onToggle} style={{borderLeft:`2px solid ${accent}`}}>
+      <div style={{padding:"11px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+          <div style={{fontSize:13,lineHeight:1.5,color:"#dce8f4",flex:1,fontWeight:500}}>{item.title}</div>
+          <div style={{fontSize:10,color:"#4a6070",flexShrink:0,transform:expanded?"rotate(180deg)":"none",transition:"transform .15s",marginTop:3}}>▾</div>
+        </div>
+        <div style={{marginTop:4,fontFamily:"'DM Mono'",fontSize:10,color:"#8090a0"}}>
+          {item.label} · {timeAgo(item.date)}
+        </div>
+        {expanded&&<ExpandedPanel item={item}/>}
+      </div>
+    </div>
+  );
+}
+
+function Column({label, color, items, expandedId, onToggle}) {
+  return (
+    <div style={{flex:1,minWidth:0}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${color}30`}}>
+        <span style={{fontFamily:"Oswald",fontSize:11,letterSpacing:".2em",color,textTransform:"uppercase"}}>{label}</span>
+        <span style={{fontFamily:"'DM Mono'",fontSize:11,color}}>{items.length}</span>
+      </div>
+      {items.length===0
+        ? <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#2a3a48",padding:"16px 0"}}>NONE DETECTED</div>
+        : items.map(item=><Card key={item.id} item={item} expanded={expandedId===item.id} onToggle={()=>onToggle(item.id)}/>)
+      }
+    </div>
+  );
+}
+
+function App() {
+  const [items, setItems]             = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [loadMsg, setLoadMsg]         = useState("Fetching SEC filings…");
+  const [expandedId, setExpandedId]   = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [error, setError]             = useState(null);
+
+  const load = useCallback(async()=>{
+    setLoading(true); setItems([]); setExpandedId(null); setError(null);
+    const all = [];
+
+    try {
+      const r = await fetch(`https://data.sec.gov/submissions/CIK${CIK}.json`);
+      if (!r.ok) throw new Error(`EDGAR ${r.status}`);
+      const d = await r.json();
+      const rec = d.filings?.recent;
+      if (!rec) throw new Error("No filings returned");
+
+      const n = Math.min(rec.accessionNumber?.length||0, 60);
+      const f4q = [], f8kq = [], f13q = [];
+
+      for (let i=0;i<n;i++) {
+        const form   = rec.form[i];
+        const date   = rec.filingDate[i];
+        const acc    = rec.accessionNumber[i];
+        const accFmt = acc.replace(/-/g,"");
+        const doc    = rec.primaryDocument[i];
+        const desc   = rec.primaryDocDescription?.[i]||"";
+        const items_ = rec.items?.[i]||"";
+        const url    = `https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/${doc}`;
+        const edgarUrl = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${CIK}&type=${encodeURIComponent(form)}&dateb=&owner=include&count=20`;
+
+        if (form==="4"||form==="4/A") {
+          if (f4q.length<12) f4q.push({i,date,acc,accFmt,doc,url,edgarUrl});
+        } else if (form==="8-K"||form==="8-K/A") {
+          if (f8kq.length<10) f8kq.push({i,date,acc,accFmt,doc,url,edgarUrl,items_,desc});
+        } else if (form.startsWith("SC 13")) {
+          if (f13q.length<8) f13q.push({i,date,acc,accFmt,doc,url,edgarUrl,form});
+        } else if (form==="10-K"||form==="10-Q"||form==="DEF 14A") {
+          const label = form==="10-K"?"Annual Report":form==="10-Q"?"Quarterly Report":"Proxy Statement";
+          const parsedItems = items_.split(",").map(s=>s.trim()).filter(Boolean).map(c=>ITEM_LABELS[c]||`Item ${c}`).filter(Boolean);
+          const {side,tw,hw} = scoreText(parsedItems.join(" ")+desc);
+          all.push({id:`misc-${i}`,type:"misc",title:parsedItems[0]||label,date,label,side,tw,hw,
+            description:`${label} filed with the SEC on ${fmtDate(date)}.`,
+            links:[{text:"View Filing →",url},{text:"All Filings →",url:edgarUrl}]});
+        }
+      }
+
+      // Parse 8-Ks — grab press release text directly from EDGAR
+      setLoadMsg("Reading press releases…");
+      await Promise.all(f8kq.map(async({i,date,accFmt,doc,url,edgarUrl,items_,desc})=>{
+        const parsedItems = items_.split(",").map(s=>s.trim()).filter(Boolean)
+          .map(c=>ITEM_LABELS[c]||`Item ${c}`).filter(Boolean);
+        const titleText = parsedItems[0]||desc||"8-K Press Release";
+        const paras = await fetch8KText(accFmt, doc);
+        const fullText = (paras||[]).join(" ");
+        const {side,tw,hw} = scoreText(fullText+" "+parsedItems.join(" "));
+        all.push({id:`8k-${i}`,type:"8k",title:titleText,date,label:"Press Release",side,tw,hw,
+          accFmt,primaryDoc:doc,prefetched:paras,
+          description:paras?null:`8-K filed ${fmtDate(date)}${parsedItems.length?": "+parsedItems.join("; "):""}`,
+          links:[{text:"View on EDGAR →",url}]});
+      }));
+
+      // Parse Form 4s — full transaction detail from XML
+      setLoadMsg("Parsing insider trades…");
+      await Promise.all(f4q.map(async({i,date,acc,accFmt,doc,url,edgarUrl})=>{
+        const detail = await parseForm4(acc,doc);
+        if (!detail) return;
+        const {name,title,txns,postShares,side} = detail;
+        const tw = side==="tailwind"?[{why:"Insider buying signals conviction from someone with direct knowledge of company performance"}]:[];
+        const hw = side==="headwind"?[{why:"Insider selling can signal reduced near-term conviction from someone with direct company knowledge"}]:[];
+        all.push({id:`f4-${i}`,type:"form4",
+          title:`${name}${title?` (${title})`:""} — ${txns[0].str}`,
+          date,label:"Insider Trade",side,tw,hw,insider:{txns,postShares},
+          links:[{text:"View Form 4 →",url},{text:"All Insider Trades →",url:edgarUrl}]});
+      }));
+
+      // Parse 13G/13D — institution name, shares, ownership %
+      setLoadMsg("Parsing institutional filings…");
+      await Promise.all(f13q.map(async({i,date,accFmt,doc,url,edgarUrl,form})=>{
+        const detail = await parse13G(accFmt,doc);
+        const label = "Institutional Holder Filing";
+        const titleText = detail?.filerName
+          ? `${detail.filerName}${detail.pct?` — ${detail.pct} ownership`:""}`
+          : label;
+        const desc = detail
+          ? `${detail.filerName||"Institution"} disclosed ${detail.shares?detail.shares+" shares":"a position"}${detail.pct?` representing ${detail.pct} of outstanding shares`:""} as of ${fmtDate(date)}.`
+          : `Institutional holder filing (${form}) filed ${fmtDate(date)}.`;
+        all.push({id:`13g-${i}`,type:"13g",title:titleText,date,label,side:"tailwind",
+          tw:[{why:"Institutional ownership reflects professional long-term conviction in PLTR"}],hw:[],
+          institutional:detail,description:desc,
+          links:[{text:"View Filing →",url},{text:"All Institutional →",url:edgarUrl}]});
+      }));
+
+    } catch(e) { setError(e.message); }
+
+    all.sort((a,b)=>new Date(b.date)-new Date(a.date));
+    setItems(all);
+    setLastUpdated(new Date());
+    setLoading(false);
+  },[]);
+
+  useEffect(()=>{load();},[load]);
+
+  const tailwinds = items.filter(i=>i.side==="tailwind");
+  const headwinds = items.filter(i=>i.side==="headwind");
+  const toggle = id => setExpandedId(prev=>prev===id?null:id);
+
+  return (
+    <div style={{minHeight:"100vh"}}>
+      <header style={{borderBottom:"1px solid #0f1520",padding:"18px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,position:"sticky",top:0,background:"#08090d",zIndex:100}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:14}}>
+          <span style={{fontFamily:"Oswald",fontSize:8,letterSpacing:".5em",color:"#c87020",textTransform:"uppercase"}}>Catalyst</span>
+          <span style={{fontFamily:"Oswald",fontSize:28,fontWeight:700,letterSpacing:".03em",color:"#e0eaf4"}}>PLTR</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          {!loading&&<>
+            <span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#00e5a0"}}>▲ {tailwinds.length}</span>
+            <span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#ff3057"}}>▼ {headwinds.length}</span>
+          </>}
+          {lastUpdated&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060"}}>{lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>}
+          <button onClick={load} disabled={loading}
+            style={{background:"transparent",border:"1px solid #1a2030",color:loading?"#2a3a48":"#8090a0",padding:"5px 12px",fontFamily:"'DM Mono'",fontSize:10,cursor:loading?"not-allowed":"pointer",letterSpacing:".07em",borderRadius:1}}>
+            {loading?"LOADING":"↻ REFRESH"}
+          </button>
+        </div>
+      </header>
+
+      <main style={{maxWidth:1200,margin:"0 auto",padding:"24px 28px 60px"}}>
+        {loading&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"120px 0",gap:14}}>
+            <div className="spin" style={{width:16,height:16,border:"2px solid #0f1520",borderTopColor:"#c87020",borderRadius:"50%"}}/>
+            <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060",letterSpacing:".1em"}}>{loadMsg}</span>
+          </div>
+        )}
+        {error&&(
+          <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'DM Mono'",fontSize:11,color:"#ff3057"}}>
+            ERROR: {error}
+          </div>
+        )}
+        {!loading&&!error&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:32}}>
+            <Column label="Tailwinds" color="#00e5a0" items={tailwinds} expandedId={expandedId} onToggle={toggle}/>
+            <Column label="Headwinds" color="#ff3057" items={headwinds} expandedId={expandedId} onToggle={toggle}/>
+          </div>
+        )}
+        {!loading&&!error&&(
+          <div style={{marginTop:36,fontFamily:"'DM Mono'",fontSize:9,color:"#2a3a48",letterSpacing:".08em",textTransform:"uppercase"}}>
+            Source: SEC EDGAR · {items.length} filings analyzed · Palantir Technologies (CIK {CIK_NUM})
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
