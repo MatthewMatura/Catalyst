@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Catalyst — PLTR</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#07090e;color:#dce4f0;font-family:'DM Sans',sans-serif;}
+    .card{background:#0f1520;border:1px solid #182030;border-radius:1px;cursor:pointer;transition:background .12s,border-color .12s;}
+    .card:hover{background:#141d2a;border-color:#1e2e45;}
+    .pill{display:inline-flex;align-items:center;padding:3px 9px;border-radius:2px;font-size:10px;font-family:'DM Mono',monospace;font-weight:500;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;border:1px solid transparent;transition:all .12s;background:transparent;}
+    .pill:hover{opacity:.8;}
+    .link-a{display:inline-flex;align-items:center;color:#4a90e2;text-decoration:none;font-size:11px;font-family:'DM Mono',monospace;padding:4px 10px;border:1px solid #1a3060;border-radius:2px;transition:background .12s;}
+    .link-a:hover{background:#1a3060;color:#7ab0ff;}
+    ::-webkit-scrollbar{width:3px;}
+    ::-webkit-scrollbar-track{background:#07090e;}
+    ::-webkit-scrollbar-thumb{background:#182030;}
+    .fade-in{animation:fi .2s ease;}
+    @keyframes fi{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+    .spin{animation:sp 1s linear infinite;}
+    @keyframes sp{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    const TICKER  = "PLTR";
+    const COMPANY = "Palantir Technologies Inc.";
+    const CIK     = "0001321655";
+    const CIK_NUM = "1321655";
+    const CORS    = "https://api.allorigins.win/get?url=";
+
+    const ITEM_LABELS = {
+      "1.01":"Material Agreement","1.02":"Agreement Terminated","2.01":"Asset Acquisition/Disposition",
+      "2.02":"Earnings Results","2.03":"Off-Balance Sheet Arrangement","2.05":"Exit Activity Costs",
+      "2.06":"Material Impairment","3.01":"Delisting Notice","3.02":"Unregistered Equity Sales",
+      "4.01":"Auditor Change","4.02":"Restatement","5.01":"Change of Control",
+      "5.02":"Director/Officer Change","5.03":"Charter Amendment","5.07":"Shareholder Vote",
+      "7.01":"Regulation FD Disclosure","8.01":"Other Events","9.01":"Financial Statements",
+    };
+
+    const FORM_META = {
+      "8-K":    { label:"Press Release",    cat:"press"         },
+      "8-K/A":  { label:"Amended 8-K",      cat:"press"         },
+      "10-K":   { label:"Annual Report",    cat:"investor"      },
+      "10-Q":   { label:"Quarterly Report", cat:"investor"      },
+      "DEF 14A":{ label:"Proxy Statement",  cat:"investor"      },
+      "4":      { label:"Insider Trade",    cat:"insider"       },
+      "4/A":    { label:"Insider Trade",    cat:"insider"       },
+      "SC 13G": { label:"Large Holder",     cat:"institutional" },
+      "SC 13G/A":{ label:"Large Holder",    cat:"institutional" },
+      "SC 13D": { label:"Large Holder",     cat:"institutional" },
+      "SC 13D/A":{ label:"Large Holder",    cat:"institutional" },
+    };
+
+    const CAT_ORDER = ["news","press","investor","institutional","insider","politician","social","community"];
+    const CAT_LABEL = {
+      news:"News", press:"Press Releases", investor:"Investor Materials",
+      insider:"Insider Activity", institutional:"Institutional", politician:"Politician Trades",
+      social:"Social", community:"Community",
+    };
+    const CAT_COLOR = {
+      news:"#60a5fa", press:"#4a90e2", investor:"#5ac8fa",
+      insider:"#f0a020", institutional:"#a374e8", politician:"#e84040",
+      social:"#ff6b9d", community:"#ff9f40",
+    };
+    const SENT_COLOR = { tailwind:"#00e5a0", headwind:"#ff3057", neutral:"#4a5568" };
+
+    // Keyword lists with PLTR-specific explanations
+    const TW_KEYS = [
+      { w:"contract",    why:"Contract wins directly drive Palantir revenue" },
+      { w:"award",       why:"Contract awards expand Palantir's recurring revenue base" },
+      { w:"win",         why:"Competitive wins signal growing enterprise/government demand" },
+      { w:"partner",     why:"Partnerships expand Palantir's platform reach and distribution" },
+      { w:"growth",      why:"Revenue growth validates Palantir's commercial expansion thesis" },
+      { w:"record",      why:"Record metrics signal accelerating business momentum" },
+      { w:"expand",      why:"Expansion indicates growing adoption of Palantir's platforms" },
+      { w:"beat",        why:"Earnings beats support the premium valuation multiple" },
+      { w:"exceed",      why:"Outperformance versus expectations is bullish for sentiment" },
+      { w:"purchas",     why:"Buying activity signals confidence in Palantir's outlook" },
+      { w:"upgrade",     why:"Analyst upgrades expand the institutional buyer base" },
+      { w:"strong",      why:"Strong results reinforce the growth narrative" },
+      { w:"increas",     why:"Increasing metrics support the bull case" },
+      { w:"deploy",      why:"Deployments validate real-world demand for Palantir's software" },
+      { w:"acqui",       why:"Acquisitions can expand Palantir's capabilities or customer base" },
+      { w:"agreement",   why:"New agreements add to Palantir's contracted revenue" },
+      { w:"revenue",     why:"Revenue metrics are the primary KPI for Palantir's growth story" },
+      { w:"profit",      why:"Profitability milestones support long-term valuation" },
+      { w:"federal",     why:"Federal government is Palantir's largest and most stable segment" },
+      { w:"government",  why:"Government contracts provide high-margin recurring revenue" },
+      { w:"aip",         why:"AIP (AI Platform) is Palantir's primary commercial growth driver" },
+      { w:"ai",          why:"AI demand is the central thesis for Palantir's commercial inflection" },
+      { w:"defense",     why:"Defense spending is a core and growing market for Palantir" },
+      { w:"military",    why:"Military contracts are high-value and long-duration for Palantir" },
+      { w:"renewal",     why:"Contract renewals demonstrate sticky, durable customer relationships" },
+    ];
+
+    const HW_KEYS = [
+      { w:"sell",        why:"Share sales by insiders or institutions may signal reduced near-term conviction" },
+      { w:"sold",        why:"Selling activity can indicate distribution of shares at current levels" },
+      { w:"investigat",  why:"Investigations create regulatory uncertainty and headline risk" },
+      { w:"lawsuit",     why:"Litigation introduces financial liability and management distraction" },
+      { w:"loss",        why:"Losses pressure the path-to-profitability narrative" },
+      { w:"miss",        why:"Earnings misses compress valuation multiples on high-growth names" },
+      { w:"declin",      why:"Declining metrics challenge the growth premium Palantir commands" },
+      { w:"cut",         why:"Cuts to guidance or spending signal potential demand softness" },
+      { w:"reduc",       why:"Reductions in key metrics undermine the bull case" },
+      { w:"resign",      why:"Executive departures create leadership uncertainty" },
+      { w:"terminat",    why:"Contract terminations directly reduce Palantir's revenue base" },
+      { w:"downgrade",   why:"Analyst downgrades can trigger institutional selling pressure" },
+      { w:"weak",        why:"Weak results threaten the premium multiple Palantir commands" },
+      { w:"decreas",     why:"Decreasing metrics challenge the growth narrative" },
+      { w:"layoff",      why:"Layoffs may signal cost pressure or slowing growth expectations" },
+      { w:"impair",      why:"Impairments reduce book value and signal asset write-downs" },
+      { w:"concern",     why:"Expressed concerns by analysts or insiders are a caution signal" },
+      { w:"risk",        why:"Elevated risk factors can suppress institutional appetite" },
+      { w:"class action",why:"Class action suits create significant legal liability" },
+      { w:"probe",       why:"Government probes introduce regulatory and reputational risk" },
+      { w:"fine",        why:"Fines reduce cash and signal compliance failures" },
+      { w:"competit",    why:"Increased competition threatens Palantir's market share and pricing power" },
+      { w:"ipo",         why:"Major IPOs can pull institutional capital away from existing positions like PLTR" },
+      { w:"short",       why:"Short interest increases signal bearish institutional positioning" },
+    ];
+
+    function scoreText(text = "") {
+      const low = text.toLowerCase();
+      const tw = TW_KEYS.filter(k => low.includes(k.w));
+      const hw = HW_KEYS.filter(k => low.includes(k.w));
+      const sentiment = tw.length > hw.length ? "tailwind" : hw.length > tw.length ? "headwind" : "neutral";
+      return { sentiment, tw, hw };
+    }
+
+    function parseItems(str = "") {
+      return str.split(",").map(s => s.trim()).filter(Boolean).map(code => {
+        const lbl = ITEM_LABELS[code];
+        return lbl ? `${lbl} (Item ${code})` : `Item ${code}`;
+      });
+    }
+
+    function fmtDate(s) {
+      if (!s) return "";
+      try { return new Date(s).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); }
+      catch { return s; }
+    }
+
+    function timeAgo(s) {
+      if (!s) return "";
+      const d = Math.floor((Date.now() - new Date(s)) / 86400000);
+      if (d === 0) return "Today";
+      if (d === 1) return "Yesterday";
+      if (d < 7)   return `${d}d ago`;
+      if (d < 30)  return `${Math.floor(d/7)}w ago`;
+      if (d < 365) return `${Math.floor(d/30)}mo ago`;
+      return `${Math.floor(d/365)}y ago`;
+    }
+
+    // Fetch and extract readable article text
+    async function fetchArticleText(url) {
+      try {
+        const r = await fetch(`${CORS}${encodeURIComponent(url)}`);
+        const j = await r.json();
+        const doc = new DOMParser().parseFromString(j.contents, "text/html");
+        // Remove noise elements
+        ["script","style","nav","header","footer","aside","figure","iframe","form","button"].forEach(tag =>
+          [...doc.querySelectorAll(tag)].forEach(el => el.remove())
+        );
+        // Extract paragraphs with meaningful content
+        const paras = [...doc.querySelectorAll("p,article p,[class*='article'] p,[class*='story'] p,[class*='body'] p")]
+          .map(p => p.textContent.replace(/\s+/g," ").trim())
+          .filter(t => t.length > 80 && !t.includes("©") && !t.includes("cookie") && !t.includes("subscribe"))
+          .slice(0, 6);
+        return paras.length ? paras.join("\n\n") : null;
+      } catch { return null; }
+    }
+
+    async function parseForm4(acc, doc) {
+      try {
+        const accFmt = acc.replace(/-/g,"");
+        const url = `https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/${doc}`;
+        const r = await fetch(url);
+        const text = await r.text();
+        const xml = new DOMParser().parseFromString(text, "text/xml");
+        const name  = xml.querySelector("rptOwnerName")?.textContent?.trim() || "Insider";
+        const title = xml.querySelector("officerTitle")?.textContent?.trim() || "";
+        const txns  = [...xml.querySelectorAll("nonDerivativeTransaction")].map(t => {
+          const code   = t.querySelector("transactionAcquiredDisposedCode value")?.textContent?.trim();
+          const shares = parseFloat(t.querySelector("transactionShares value")?.textContent || "0");
+          const price  = parseFloat(t.querySelector("transactionPricePerShare value")?.textContent || "0");
+          const value  = shares * price;
+          const action = code === "D" ? "Disposed of" : "Acquired";
+          return `${action} ${shares.toLocaleString("en-US",{maximumFractionDigits:0})} shares` +
+                 (price > 0 ? ` at $${price.toFixed(2)}` : "") +
+                 (value > 1e4 ? ` (~$${(value/1e6).toFixed(2)}M)` : "");
+        });
+        const postOwned = xml.querySelector("sharesOwnedFollowingTransaction value")?.textContent;
+        const ownedStr  = postOwned ? ` Owns ${parseFloat(postOwned).toLocaleString()} shares post-transaction.` : "";
+        const sentiment = txns.some(d => d.startsWith("Disposed")) ? "headwind" : "tailwind";
+        return { name, title, txns, ownedStr, sentiment };
+      } catch { return null; }
+    }
+
+    // ── EXPANDED PANEL ──────────────────────────────────────────────────────
+    function ExpandedPanel({ item, contentCache, setContentCache }) {
+      const [fetching, setFetching] = useState(false);
+      const [content, setContent]   = useState(contentCache[item.id] || null);
+      const [score, setScore]       = useState(null);
+
+      useEffect(() => {
+        if (content) {
+          setScore(scoreText(content.fullText || item.description));
+          return;
+        }
+        // Only fetch for news/press items that have a URL
+        const fetchUrl = item.links?.[0]?.url;
+        const canFetch = fetchUrl && (item.cat === "news" || item.cat === "press") &&
+                         !fetchUrl.includes("sec.gov") && !fetchUrl.includes("reddit.com");
+        if (!canFetch) {
+          const base = { fullText: item.description, paragraphs: null };
+          setContent(base);
+          setScore(scoreText(item.description));
+          setContentCache(c => ({ ...c, [item.id]: base }));
+          return;
+        }
+        setFetching(true);
+        fetchArticleText(fetchUrl).then(paragraphs => {
+          const fullText = paragraphs || item.description;
+          const result = { fullText, paragraphs };
+          setContent(result);
+          setScore(scoreText(fullText));
+          setContentCache(c => ({ ...c, [item.id]: result }));
+          setFetching(false);
+        });
+      }, []);
+
+      const sc = SENT_COLOR[item.sentiment];
+
+      return (
+        <div className="fade-in" onClick={e=>e.stopPropagation()} style={{marginTop:10,paddingTop:12,borderTop:"1px solid #0f1820"}}>
+
+          {fetching && (
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+              <div className="spin" style={{width:12,height:12,border:"1px solid #182030",borderTopColor:"#e8a020",borderRadius:"50%",flexShrink:0}}/>
+              <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#2a3a50",letterSpacing:".08em"}}>FETCHING ARTICLE…</span>
+            </div>
+          )}
+
+          {/* Full article content */}
+          {content?.paragraphs && (
+            <div style={{marginBottom:12}}>
+              <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#2a3848",letterSpacing:".12em",textTransform:"uppercase",marginBottom:6}}>Article Content</div>
+              {content.paragraphs.split("\n\n").map((p,i) => (
+                <p key={i} style={{fontSize:13,color:"#7a90a8",lineHeight:1.7,marginBottom:8}}>{p}</p>
+              ))}
+            </div>
+          )}
+
+          {/* Fallback description if no article */}
+          {!content?.paragraphs && content?.fullText && (
+            <p style={{fontSize:13,color:"#7a90a8",lineHeight:1.7,marginBottom:12}}>{content.fullText}</p>
+          )}
+
+          {/* Scoring breakdown */}
+          {score && (score.tw.length > 0 || score.hw.length > 0) && (
+            <div style={{marginBottom:12,padding:"10px 12px",background:"#070c14",border:"1px solid #0f1820",borderRadius:2}}>
+              <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#2a3848",letterSpacing:".12em",textTransform:"uppercase",marginBottom:8}}>
+                Why {item.sentiment === "neutral" ? "Neutral" : item.sentiment === "tailwind" ? "▲ Tailwind" : "▼ Headwind"} for PLTR
+              </div>
+              {score.tw.length > 0 && (
+                <div style={{marginBottom:score.hw.length>0?8:0}}>
+                  {score.tw.map((k,i) => (
+                    <div key={i} style={{display:"flex",gap:8,marginBottom:4,alignItems:"flex-start"}}>
+                      <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#00e5a0",flexShrink:0,marginTop:1}}>▲</span>
+                      <span style={{fontSize:12,color:"#506070",lineHeight:1.5}}>{k.why}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {score.hw.length > 0 && (
+                <div>
+                  {score.hw.map((k,i) => (
+                    <div key={i} style={{display:"flex",gap:8,marginBottom:4,alignItems:"flex-start"}}>
+                      <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#ff3057",flexShrink:0,marginTop:1}}>▼</span>
+                      <span style={{fontSize:12,color:"#506070",lineHeight:1.5}}>{k.why}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Links */}
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            {item.links?.map((l,i) => (
+              <a key={i} href={l.url} target="_blank" rel="noopener noreferrer" className="link-a">{l.text}</a>
+            ))}
+            <span style={{marginLeft:"auto",fontFamily:"'DM Mono'",fontSize:10,color:"#1e2e3e"}}>{item.date}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ── MAIN APP ────────────────────────────────────────────────────────────
+    function Catalyst() {
+      const [sections, setSections]           = useState({});
+      const [loading, setLoading]             = useState(true);
+      const [loadMsg, setLoadMsg]             = useState("Initializing…");
+      const [expandedId, setExpandedId]       = useState(null);
+      const [sentFilter, setSentFilter]       = useState("all");
+      const [catFilter, setCatFilter]         = useState("all");
+      const [lastUpdated, setLastUpdated]     = useState(null);
+      const [srcStatus, setSrcStatus]         = useState({});
+      const [contentCache, setContentCache]   = useState({});
+
+      const load = useCallback(async () => {
+        setLoading(true); setSections({}); setExpandedId(null); setContentCache({});
+        const raw = {}; const status = {};
+        const push = (cat, item) => { if (!raw[cat]) raw[cat]=[]; raw[cat].push({...item, cat}); };
+
+        // NEWS
+        setLoadMsg("Fetching news…");
+        try {
+          const feed = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${TICKER}&region=US&lang=en-US`;
+          const r = await fetch(`${CORS}${encodeURIComponent(feed)}`);
+          const j = await r.json();
+          const xml = new DOMParser().parseFromString(j.contents, "text/xml");
+          [...xml.querySelectorAll("item")].slice(0,15).forEach((it,i) => {
+            const title   = it.querySelector("title")?.textContent || "";
+            const link    = it.querySelector("link")?.textContent || "";
+            const rawDesc = it.querySelector("description")?.textContent || "";
+            const desc    = rawDesc.replace(/<[^>]+>/g,"").trim();
+            const pubDate = it.querySelector("pubDate")?.textContent || "";
+            const date    = pubDate ? new Date(pubDate).toISOString().slice(0,10) : "";
+            const { sentiment } = scoreText(title+" "+desc);
+            push("news", {
+              id:`news-${i}`, title, date, source:"Yahoo Finance", label:"Headline", sentiment,
+              description: desc || title,
+              links: link ? [{ text:"Read Full Article →", url:link }] : [],
+            });
+          });
+          status.yahoo = "ok";
+        } catch { status.yahoo = "error"; }
+
+        // SEC EDGAR
+        setLoadMsg("Fetching SEC filings…");
+        try {
+          const r = await fetch(`https://data.sec.gov/submissions/CIK${CIK}.json`);
+          const d = await r.json();
+          const rec = d.filings?.recent;
+          if (rec) {
+            const n = Math.min(rec.accessionNumber?.length||0, 60);
+            const f4q = [];
+            for (let i=0; i<n; i++) {
+              const form = rec.form[i];
+              const meta = FORM_META[form];
+              if (!meta) continue;
+              const desc   = rec.primaryDocDescription?.[i]||"";
+              const items  = rec.items?.[i]||"";
+              const date   = rec.filingDate[i];
+              const acc    = rec.accessionNumber[i];
+              const accFmt = acc.replace(/-/g,"");
+              const doc    = rec.primaryDocument[i];
+              const filingUrl = `https://www.sec.gov/Archives/edgar/data/${CIK_NUM}/${accFmt}/${doc}`;
+              const edgarUrl  = `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${CIK}&type=${encodeURIComponent(form)}&dateb=&owner=include&count=20`;
+              if (form==="4"||form==="4/A") { if (f4q.length<10) f4q.push({i,date,acc,doc,filingUrl,edgarUrl}); continue; }
+              const parsedItems = parseItems(items);
+              const titleText   = parsedItems[0]||desc||meta.label;
+              const description = parsedItems.length
+                ? `This ${meta.label} filed ${fmtDate(date)} discloses: ${parsedItems.join("; ")}.`
+                : `${meta.label} filed with the SEC on ${fmtDate(date)}.${desc?" "+desc+".":""}`;
+              const { sentiment } = scoreText(parsedItems.join(" ")+desc);
+              push(meta.cat, {
+                id:`edgar-${i}`, title:titleText, date, source:"SEC EDGAR", label:meta.label, form, sentiment, description,
+                links:[{text:"View Filing →",url:filingUrl},{text:"All Filings →",url:edgarUrl}],
+              });
+            }
+            setLoadMsg("Parsing insider trades…");
+            await Promise.all(f4q.map(async ({i,date,acc,doc,filingUrl,edgarUrl})=>{
+              const detail = await parseForm4(acc,doc);
+              const name   = detail?.name||"Insider";
+              const ttl    = detail?.title||"";
+              const txns   = detail?.txns||[];
+              const owned  = detail?.ownedStr||"";
+              const sent   = detail?.sentiment||"neutral";
+              push("insider",{
+                id:`form4-${i}`,
+                title:`${name}${ttl?` (${ttl})`:""} — ${txns[0]||"Insider Trade Filed"}`,
+                date, source:"SEC EDGAR", label:"Insider Trade", form:"4", sentiment:sent,
+                description:`${name}${ttl?`, ${ttl},`:""} disclosed on ${fmtDate(date)}: ${txns.join("; ")||"See filing."}${owned}`,
+                links:[{text:"View Form 4 →",url:filingUrl},{text:"All Insider Trades →",url:edgarUrl}],
+              });
+            }));
+            status.edgar = "ok";
+          }
+        } catch { status.edgar = "error"; }
+
+        // SENATE
+        setLoadMsg("Fetching politician trades…");
+        try {
+          const today = new Date().toISOString().slice(0,10);
+          const url = `https://efts.senate.gov/LATEST/search-results?q=%22${TICKER}%22&dateRange=custom&fromDate=2021-01-01&toDate=${today}&resultsType=transactions`;
+          const r = await fetch(`${CORS}${encodeURIComponent(url)}`);
+          const j = await r.json();
+          const data = JSON.parse(j.contents);
+          (data.results||[]).slice(0,12).forEach((t,i)=>{
+            const who = t.first_name?`${t.first_name} ${t.last_name}`:"Senator";
+            const type = t.type||"Transaction";
+            const amt = t.amount||"";
+            const date = t.transaction_date?new Date(t.transaction_date).toISOString().slice(0,10):"";
+            const isBuy = /purchase|buy/i.test(type);
+            push("politician",{
+              id:`senate-${i}`,
+              title:`Sen. ${who} — ${type} (${amt||"amount undisclosed"})`,
+              date, source:"U.S. Senate Disclosures", label:"Senate Trade",
+              sentiment:isBuy?"tailwind":"headwind",
+              description:`Senator ${who} disclosed a ${type} in $${TICKER}${amt?` valued at ${amt}`:""}${date?` on ${fmtDate(date)}`:""}.`,
+              links:[{text:"Senate EFTS →",url:`https://efts.senate.gov/LATEST/search-results?q=${TICKER}&resultsType=transactions`}],
+            });
+          });
+          status.senate = "ok";
+        } catch { status.senate = "error"; }
+
+        // HOUSE
+        try {
+          const url = "https://house-stock-watcher-data.s3-us-east-2.amazonaws.com/data/all_transactions.json";
+          const r = await fetch(`${CORS}${encodeURIComponent(url)}`);
+          const j = await r.json();
+          const all = JSON.parse(j.contents);
+          all.filter(t=>t.ticker===TICKER||(t.asset_description||"").toLowerCase().includes("palantir"))
+            .slice(0,12).forEach((t,i)=>{
+              const name = t.representative||"Representative";
+              const type = t.type||"Transaction";
+              const amt  = t.amount||"";
+              const date = t.transaction_date?new Date(t.transaction_date).toISOString().slice(0,10):"";
+              const isBuy = /purchase/i.test(type);
+              push("politician",{
+                id:`house-${i}`,
+                title:`Rep. ${name} — ${type} (${amt||"amount undisclosed"})`,
+                date, source:"House Disclosures", label:"House Trade",
+                sentiment:isBuy?"tailwind":"headwind",
+                description:`Rep. ${name} (${t.party||"N/A"}) disclosed a ${type} in $${TICKER}${amt?` valued at ${amt}`:""}${date?` on ${fmtDate(date)}`:""}.`,
+                links:[{text:"House Stock Watcher →",url:`https://housestockwatcher.com/summary_by_ticker?pticker=${TICKER}`},{text:"House Disclosures →",url:"https://disclosures.house.gov"}],
+              });
+            });
+          status.house = "ok";
+        } catch { status.house = "error"; }
+
+        // STOCKTWITS
+        setLoadMsg("Fetching social…");
+        try {
+          const r = await fetch(`https://api.stocktwits.com/api/2/streams/symbol/${TICKER}.json`);
+          const d = await r.json();
+          (d.messages||[]).slice(0,12).forEach((msg,i)=>{
+            const s = msg.entities?.sentiment?.basic;
+            const sent = s==="Bullish"?"tailwind":s==="Bearish"?"headwind":"neutral";
+            const body = msg.body||"";
+            push("social",{
+              id:`st-${i}`, title:body.length>120?body.slice(0,117)+"…":body,
+              date:msg.created_at?.slice(0,10)||"", source:"StockTwits", label:"StockTwits", sentiment:sent,
+              description:body, meta:`@${msg.user.username} · ${msg.likes_count||0} likes`,
+              links:[{text:"View Post →",url:`https://stocktwits.com/${msg.user.username}/message/${msg.id}`},{text:`@${msg.user.username} →`,url:`https://stocktwits.com/${msg.user.username}`}],
+            });
+          });
+          status.stocktwits = "ok";
+        } catch { status.stocktwits = "error"; }
+
+        // REDDIT
+        try {
+          const r = await fetch(`https://www.reddit.com/r/Palantir/new.json?limit=8`);
+          const d = await r.json();
+          (d.data?.children||[]).forEach((post,i)=>{
+            const p = post.data;
+            const { sentiment } = scoreText(p.title+" "+(p.selftext||""));
+            push("community",{
+              id:`rpltr-${i}`, title:p.title,
+              date:new Date(p.created_utc*1000).toISOString().slice(0,10),
+              source:"Reddit", label:"r/Palantir", sentiment,
+              description:(p.selftext||p.title).slice(0,500),
+              meta:`${p.score} pts · ${p.num_comments} comments`,
+              links:[{text:"View Post →",url:`https://reddit.com${p.permalink}`}],
+            });
+          });
+          status.reddit = "ok";
+        } catch { status.reddit = "error"; }
+
+        try {
+          const r = await fetch(`https://www.reddit.com/r/wallstreetbets/search.json?q=${TICKER}&sort=new&restrict_sr=1&limit=5`);
+          const d = await r.json();
+          (d.data?.children||[]).forEach((post,i)=>{
+            const p = post.data;
+            const { sentiment } = scoreText(p.title);
+            push("community",{
+              id:`wsb-${i}`, title:p.title,
+              date:new Date(p.created_utc*1000).toISOString().slice(0,10),
+              source:"Reddit", label:"r/WSB", sentiment,
+              description:(p.selftext||p.title).slice(0,400),
+              meta:`${p.score} pts`,
+              links:[{text:"View Post →",url:`https://reddit.com${p.permalink}`}],
+            });
+          });
+        } catch {}
+
+        const built = {};
+        for (const cat of CAT_ORDER) {
+          if (raw[cat]?.length) built[cat] = raw[cat].sort((a,b)=>new Date(b.date)-new Date(a.date));
+        }
+        setSections(built);
+        setSrcStatus(status);
+        setLastUpdated(new Date());
+        setLoading(false);
+      }, []);
+
+      useEffect(()=>{ load(); },[load]);
+
+      const allItems = CAT_ORDER.flatMap(c=>sections[c]||[]);
+      const twCount  = allItems.filter(i=>i.sentiment==="tailwind").length;
+      const hwCount  = allItems.filter(i=>i.sentiment==="headwind").length;
+
+      const filtered = {};
+      for (const cat of CAT_ORDER) {
+        if (catFilter!=="all"&&catFilter!==cat) continue;
+        const sec = (sections[cat]||[]).filter(i=>sentFilter==="all"||i.sentiment===sentFilter);
+        if (sec.length) filtered[cat] = sec;
+      }
+
+      return (
+        <div style={{minHeight:"100vh"}}>
+          <header style={{borderBottom:"1px solid #182030",padding:"16px 24px 12px",position:"sticky",top:0,background:"#07090e",zIndex:100}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+              <div style={{display:"flex",alignItems:"baseline",gap:14}}>
+                <span style={{fontFamily:"Oswald",fontSize:9,letterSpacing:".4em",color:"#e8a020",textTransform:"uppercase"}}>Catalyst</span>
+                <span style={{fontFamily:"Oswald",fontSize:26,fontWeight:700,letterSpacing:".04em"}}>{TICKER}</span>
+                <span style={{fontSize:11,color:"#253545"}}>{COMPANY}</span>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                {lastUpdated&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#1e2e3e"}}>{lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>}
+                <button onClick={load} disabled={loading} style={{background:"transparent",border:"1px solid #182030",color:loading?"#1e2e3e":"#607888",padding:"5px 14px",borderRadius:2,fontFamily:"'DM Mono'",fontSize:10,cursor:loading?"not-allowed":"pointer",letterSpacing:".08em"}}>
+                  {loading?"LOADING…":"↻ REFRESH"}
+                </button>
+              </div>
+            </div>
+            {!loading&&allItems.length>0&&(
+              <div style={{display:"flex",gap:18,marginTop:8,alignItems:"center"}}>
+                {[["tailwind","#00e5a0",twCount],["headwind","#ff3057",hwCount],["neutral","#3a5068",allItems.length-twCount-hwCount]].map(([s,c,n])=>(
+                  <div key={s} style={{display:"flex",alignItems:"center",gap:5}}>
+                    <span style={{fontFamily:"'DM Mono'",fontSize:12,color:c,fontWeight:500}}>{n}</span>
+                    <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#283848"}}>{s}</span>
+                  </div>
+                ))}
+                <span style={{marginLeft:"auto",fontFamily:"'DM Mono'",fontSize:10,color:"#1e2a38"}}>{allItems.length} catalysts loaded</span>
+              </div>
+            )}
+            {!loading&&(
+              <div style={{display:"flex",gap:4,marginTop:8,flexWrap:"wrap"}}>
+                {[{v:"all",l:"ALL"},{v:"tailwind",l:"▲ TAILWIND"},{v:"headwind",l:"▼ HEADWIND"}].map(({v,l})=>(
+                  <button key={v} className="pill" onClick={()=>setSentFilter(v)} style={{
+                    background:sentFilter===v?v==="tailwind"?"rgba(0,229,160,.1)":v==="headwind"?"rgba(255,48,87,.1)":"rgba(255,255,255,.05)":"transparent",
+                    borderColor:sentFilter===v?v==="tailwind"?"#00e5a0":v==="headwind"?"#ff3057":"#3a5068":"#182030",
+                    color:sentFilter===v?v==="tailwind"?"#00e5a0":v==="headwind"?"#ff3057":"#dce4f0":"#3a5068",
+                  }}>{l}</button>
+                ))}
+                <div style={{width:1,height:14,background:"#182030",margin:"0 4px",alignSelf:"center"}}/>
+                {["all",...CAT_ORDER].map(c=>(
+                  <button key={c} className="pill" onClick={()=>setCatFilter(c)} style={{
+                    background:catFilter===c?"rgba(255,255,255,.04)":"transparent",
+                    borderColor:catFilter===c?"#3a5068":"#182030",
+                    color:catFilter===c?"#a0b0c0":"#283848",
+                  }}>{c==="all"?"ALL":(CAT_LABEL[c]||c).toUpperCase()}</button>
+                ))}
+              </div>
+            )}
+          </header>
+
+          <main style={{maxWidth:900,margin:"0 auto",padding:"14px 20px 60px"}}>
+            {loading&&(
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"100px 0",gap:14}}>
+                <div className="spin" style={{width:18,height:18,border:"2px solid #182030",borderTopColor:"#e8a020",borderRadius:"50%"}}/>
+                <span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#2a3a50",letterSpacing:".1em"}}>{loadMsg}</span>
+              </div>
+            )}
+            {!loading&&Object.keys(filtered).length===0&&(
+              <div style={{textAlign:"center",padding:"80px 0",fontFamily:"'DM Mono'",fontSize:11,color:"#1e2a38",letterSpacing:".1em"}}>NO CATALYSTS MATCH CURRENT FILTERS</div>
+            )}
+            {CAT_ORDER.filter(c=>filtered[c]).map(cat=>{
+              const color = CAT_COLOR[cat]||"#3a5068";
+              const items = filtered[cat];
+              const tw = items.filter(i=>i.sentiment==="tailwind").length;
+              const hw = items.filter(i=>i.sentiment==="headwind").length;
+              return (
+                <section key={cat} style={{marginBottom:28}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${color}22`}}>
+                    <span style={{fontFamily:"Oswald",fontSize:10,letterSpacing:".25em",color,textTransform:"uppercase"}}>{CAT_LABEL[cat]}</span>
+                    <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#2a3848"}}>{items.length}</span>
+                    {tw>0&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#00e5a0"}}>▲{tw}</span>}
+                    {hw>0&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#ff3057"}}>▼{hw}</span>}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    {items.map(item=>{
+                      const isOpen = expandedId===item.id;
+                      const sc = SENT_COLOR[item.sentiment];
+                      return (
+                        <div key={item.id} className="card fade-in" onClick={()=>setExpandedId(isOpen?null:item.id)} style={{borderLeft:`2px solid ${sc}`}}>
+                          <div style={{padding:"10px 14px",display:"flex",alignItems:"flex-start",gap:10}}>
+                            <div style={{width:5,height:5,borderRadius:"50%",marginTop:6,flexShrink:0,background:sc,boxShadow:item.sentiment!=="neutral"?`0 0 5px ${sc}50`:"none"}}/>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
+                                <div style={{flex:1,minWidth:0}}>
+                                  <div style={{fontSize:13,lineHeight:1.45,color:"#c8d4e0",marginBottom:5,wordBreak:"break-word"}}>{item.title}</div>
+                                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                                    <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#283848"}}>{item.source}</span>
+                                    <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#1e2a38"}}>·</span>
+                                    <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#283848"}}>{timeAgo(item.date)}</span>
+                                    {item.meta&&<><span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#1e2a38"}}>·</span><span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#283848"}}>{item.meta}</span></>}
+                                  </div>
+                                </div>
+                                <div style={{color:"#283848",fontSize:10,flexShrink:0,marginTop:2,transform:isOpen?"rotate(180deg)":"none",transition:"transform .15s"}}>▾</div>
+                              </div>
+                              {isOpen&&(
+                                <ExpandedPanel
+                                  item={item}
+                                  contentCache={contentCache}
+                                  setContentCache={setContentCache}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              );
+            })}
+            {!loading&&Object.keys(srcStatus).length>0&&(
+              <div style={{display:"flex",gap:16,flexWrap:"wrap",borderTop:"1px solid #0f1820",paddingTop:14,marginTop:10}}>
+                {Object.entries(srcStatus).map(([src,s])=>(
+                  <div key={src} style={{display:"flex",alignItems:"center",gap:5}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:s==="ok"?"#00e5a0":"#ff3057"}}/>
+                    <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#283848",textTransform:"uppercase",letterSpacing:".08em"}}>{src}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<Catalyst />);
+  </script>
+</body>
+</html>
