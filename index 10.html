@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Catalyst — Gov Contracts</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@700&family=DM+Sans:wght@400;500&family=DM+Mono:wght@400&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#08090d;color:#e0eaf4;font-family:'DM Sans',sans-serif;min-height:100vh;}
+    .card{background:#0d1117;border:1px solid #1a2030;transition:border-color .15s;margin-bottom:3px;border-radius:1px;}
+    .card.clickable{cursor:pointer;}
+    .card.clickable:hover{border-color:#253040;}
+    .fade{animation:fi .18s ease;}
+    @keyframes fi{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+    .spin{animation:sp 1s linear infinite;}
+    @keyframes sp{to{transform:rotate(360deg)}}
+    .tab{padding:6px 14px;fontFamily:'DM Mono',monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;border:1px solid transparent;border-radius:1px;background:transparent;color:#4a6070;transition:all .15s;}
+    .tab.active{color:#e0eaf4;border-color:#1a2030;background:#0d1117;}
+    .tab:hover{color:#a0b0c0;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const WATCHLIST = [
+  { ticker:"PLTR",  name:"Palantir Technologies",  search:"Palantir",  color:"#a374e8" },
+  { ticker:"NVDA",  name:"NVIDIA Corporation",      search:"NVIDIA",    color:"#76b900" },
+  { ticker:"NEE",   name:"NextEra Energy",           search:"NextEra",   color:"#4a90e2" },
+  { ticker:"AMZN",  name:"Amazon",                  search:"Amazon",    color:"#ff9900" },
+  { ticker:"RTX",   name:"RTX Corporation",          search:"RTX",       color:"#c87020" },
+];
+
+const API = "https://api.usaspending.gov/api/v2";
+
+function fmt$(n) {
+  if (!n) return "Undisclosed";
+  if (n>=1e9) return `$${(n/1e9).toFixed(2)}B`;
+  if (n>=1e6) return `$${(n/1e6).toFixed(1)}M`;
+  if (n>=1e3) return `$${(n/1e3).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
+function timeAgo(s) {
+  if (!s) return "";
+  const d = Math.floor((Date.now()-new Date(s))/86400000);
+  if (d===0) return "Today";
+  if (d===1) return "Yesterday";
+  if (d<7)   return `${d}d ago`;
+  if (d<30)  return `${Math.floor(d/7)}w ago`;
+  if (d<365) return `${Math.floor(d/30)}mo ago`;
+  return `${Math.floor(d/365)}y ago`;
+}
+
+function fmtDate(s) {
+  if (!s) return "";
+  try { return new Date(s).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); }
+  catch { return s; }
+}
+
+async function fetchContracts(searchName) {
+  const body = {
+    filters: {
+      keywords: [searchName],
+      award_type_codes: ["A","B","C","D"],
+      time_period: [{ start_date:"2020-01-01", end_date: new Date().toISOString().slice(0,10) }],
+    },
+    fields: ["Award ID","Recipient Name","Action Date","Award Amount","Awarding Agency Name","Description","Place of Performance State Code","Period of Performance Current End Date","Contract Award Type"],
+    page: 1,
+    limit: 25,
+    sort: "Action Date",
+    order: "desc",
+    subawards: false,
+  };
+
+  const r = await fetch(`${API}/search/spending_by_award/`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`USASpending ${r.status}`);
+  const d = await r.json();
+  return d.results||[];
+}
+
+async function fetchTotals(searchName) {
+  const currentYear = new Date().getFullYear();
+  const body = {
+    filters: {
+      keywords: [searchName],
+      award_type_codes: ["A","B","C","D"],
+      time_period: [{ start_date:`${currentYear}-01-01`, end_date: new Date().toISOString().slice(0,10) }],
+    },
+    fields: ["Award Amount"],
+    page: 1,
+    limit: 100,
+    sort: "Action Date",
+    order: "desc",
+    subawards: false,
+  };
+  const r = await fetch(`${API}/search/spending_by_award/`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body),
+  });
+  const d = await r.json();
+  const total = (d.results||[]).reduce((sum,c)=>sum+(c["Award Amount"]||0),0);
+  return { total, count: (d.results||[]).length };
+}
+
+function ContractCard({c, color}) {
+  const [open, setOpen] = useState(false);
+  const amount   = c["Award Amount"];
+  const agency   = c["Awarding Agency Name"]||"Unknown Agency";
+  const desc     = c["Description"]||"";
+  const date     = c["Action Date"]||"";
+  const endDate  = c["Period of Performance Current End Date"]||"";
+  const awardId  = c["Award ID"]||"";
+  const recipient = c["Recipient Name"]||"";
+
+  const isLarge  = amount >= 1e8;
+  const isMed    = amount >= 1e7 && amount < 1e8;
+
+  return (
+    <div className="card clickable fade" onClick={()=>setOpen(o=>!o)}
+      style={{borderLeft:`2px solid ${isLarge?"#00e5a0":isMed?color:"#1a2030"}`}}>
+      <div style={{padding:"11px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:500,color:"#dce8f4",lineHeight:1.4,marginBottom:4}}>
+              {agency}
+            </div>
+            <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#8090a0"}}>
+              {timeAgo(date)}
+              {desc && <span style={{color:"#4a6070"}}> · {desc.slice(0,60)}{desc.length>60?"…":""}</span>}
+            </div>
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            <div style={{fontFamily:"'DM Mono'",fontSize:13,color:isLarge?"#00e5a0":isMed?color:"#8090a0",fontWeight:500}}>
+              {fmt$(amount)}
+            </div>
+            <div style={{fontSize:10,color:"#283848",transform:open?"rotate(180deg)":"none",transition:"transform .15s",marginTop:2,textAlign:"center"}}>▾</div>
+          </div>
+        </div>
+
+        {open && (
+          <div className="fade" onClick={e=>e.stopPropagation()} style={{marginTop:12,paddingTop:12,borderTop:"1px solid #0f1520"}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+              {[
+                ["Agency", agency],
+                ["Contract Value", fmt$(amount)],
+                ["Award Date", fmtDate(date)],
+                ["End Date", endDate?fmtDate(endDate):"—"],
+                ["Recipient", recipient],
+                ["Award ID", awardId||"—"],
+              ].map(([label,val])=>(
+                <div key={label}>
+                  <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase",marginBottom:3}}>{label}</div>
+                  <div style={{fontSize:12,color:"#a0b8c8",lineHeight:1.4}}>{val}</div>
+                </div>
+              ))}
+            </div>
+            {desc && (
+              <div style={{marginBottom:12}}>
+                <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase",marginBottom:4}}>Description</div>
+                <div style={{fontSize:12,color:"#8090a0",lineHeight:1.6}}>{desc}</div>
+              </div>
+            )}
+            {isLarge && (
+              <div style={{padding:"8px 10px",background:"#06080d",border:"1px solid #0f1520",borderRadius:2,marginBottom:10}}>
+                <span style={{color:"#00e5a0",fontSize:10,fontFamily:"'DM Mono'"}}>▲ MAJOR CONTRACT</span>
+                <span style={{fontSize:12,color:"#506070",marginLeft:8}}>Award over $100M — significant revenue catalyst</span>
+              </div>
+            )}
+            {awardId && (
+              <a href={`https://www.usaspending.gov/award/${awardId}`} target="_blank" rel="noopener noreferrer"
+                style={{fontFamily:"'DM Mono'",fontSize:10,color:"#4a90e2",border:"1px solid #1a3060",padding:"4px 10px",borderRadius:2,display:"inline-block"}}>
+                View on USASpending →
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TickerPanel({company, contracts, totals, loading, error}) {
+  const { ticker, name, color } = company;
+  const [agencyFilter, setAgencyFilter] = useState("ALL");
+
+  const agencies = ["ALL", ...Array.from(new Set(contracts.map(c=>c["Awarding Agency Name"]||"Unknown Agency"))).sort()];
+  const visible  = agencyFilter==="ALL" ? contracts : contracts.filter(c=>(c["Awarding Agency Name"]||"Unknown Agency")===agencyFilter);
+
+  return (
+    <div>
+      {/* Stats bar */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,padding:"10px 14px",background:"#0d1117",border:"1px solid #1a2030",borderRadius:1}}>
+        <div>
+          <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".12em",textTransform:"uppercase",marginBottom:3}}>YTD Contract Value</div>
+          <div style={{fontFamily:"'DM Mono'",fontSize:14,color,fontWeight:500}}>{totals?fmt$(totals.total):"—"}</div>
+        </div>
+        <div style={{width:1,height:30,background:"#1a2030",margin:"0 4px"}}/>
+        <div>
+          <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".12em",textTransform:"uppercase",marginBottom:3}}>YTD Awards</div>
+          <div style={{fontFamily:"'DM Mono'",fontSize:14,color:"#a0b8c8",fontWeight:500}}>{totals?totals.count:"—"}</div>
+        </div>
+        <div style={{width:1,height:30,background:"#1a2030",margin:"0 4px"}}/>
+        <div>
+          <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".12em",textTransform:"uppercase",marginBottom:3}}>Showing</div>
+          <div style={{fontFamily:"'DM Mono'",fontSize:14,color:"#a0b8c8",fontWeight:500}}>{contracts.length} recent</div>
+        </div>
+      </div>
+
+      {loading && (
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"40px 0",justifyContent:"center"}}>
+          <div className="spin" style={{width:14,height:14,border:"2px solid #0f1520",borderTopColor:color,borderRadius:"50%"}}/>
+          <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060",letterSpacing:".1em"}}>FETCHING CONTRACTS…</span>
+        </div>
+      )}
+
+      {error && (
+        <div style={{fontFamily:"'DM Mono'",fontSize:11,color:"#ff3057",padding:"20px 0"}}>{error}</div>
+      )}
+
+      {/* Agency filter */}
+      {!loading && agencies.length > 2 && (
+        <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <span style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase"}}>Agency</span>
+          <select value={agencyFilter} onChange={e=>setAgencyFilter(e.target.value)}
+            style={{background:"#0d1117",border:"1px solid #1a2030",color:"#a0b8c8",fontFamily:"'DM Mono'",fontSize:11,padding:"4px 8px",borderRadius:2,cursor:"pointer",maxWidth:320}}>
+            {agencies.map(a=><option key={a} value={a}>{a==="ALL"?"All Agencies":a}</option>)}
+          </select>
+          {agencyFilter!=="ALL"&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:color}}>{visible.length} contracts</span>}
+        </div>
+      )}
+
+      {!loading && !error && visible.length === 0 && (
+        <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#2a3a48",padding:"20px 0"}}>NO CONTRACTS FOUND</div>
+      )}
+
+      {!loading && visible.map((c,i)=>(
+        <ContractCard key={i} c={c} color={color}/>
+      ))}
+
+      {!loading && contracts.length > 0 && (
+        <div style={{marginTop:12}}>
+          <a href={`https://www.usaspending.gov/search/?hash=`} target="_blank" rel="noopener noreferrer"
+            style={{fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060"}}>
+            View all on USASpending.gov →
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  const [activeIdx, setActiveIdx]     = useState(0);
+  const [data, setData]               = useState({});
+  const [totals, setTotals]           = useState({});
+  const [loading, setLoading]         = useState({});
+  const [errors, setErrors]           = useState({});
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const fetched = useRef({});
+
+  const loadTicker = useCallback(async(company) => {
+    const key = company.ticker;
+    if (fetched.current[key]) return;
+    fetched.current[key] = true;
+    setLoading(l=>({...l,[key]:true}));
+    setErrors(e=>({...e,[key]:null}));
+    try {
+      const [contracts, tots] = await Promise.all([
+        fetchContracts(company.search),
+        fetchTotals(company.search),
+      ]);
+      setData(d=>({...d,[key]:contracts}));
+      setTotals(t=>({...t,[key]:tots}));
+      setLastUpdated(new Date());
+    } catch(e) {
+      setErrors(err=>({...err,[key]:e.message}));
+    }
+    setLoading(l=>({...l,[key]:false}));
+  },[]);
+
+  // Load active ticker
+  useEffect(()=>{
+    loadTicker(WATCHLIST[activeIdx]);
+  },[activeIdx]);
+
+  // Prefetch all in background after first load
+  useEffect(()=>{
+    const t = setTimeout(()=>{
+      WATCHLIST.forEach(c=>loadTicker(c));
+    }, 2000);
+    return ()=>clearTimeout(t);
+  },[]);
+
+  const refresh = () => {
+    fetched.current = {};
+    setData({}); setTotals({}); setErrors({});
+    loadTicker(WATCHLIST[activeIdx]);
+  };
+
+  const company   = WATCHLIST[activeIdx];
+  const contracts = data[company.ticker]||[];
+  const isLoading = loading[company.ticker]||false;
+  const error     = errors[company.ticker]||null;
+  const tots      = totals[company.ticker]||null;
+
+  return (
+    <div style={{minHeight:"100vh"}}>
+      {/* HEADER */}
+      <header style={{borderBottom:"1px solid #0f1520",padding:"16px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,position:"sticky",top:0,background:"#08090d",zIndex:100}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:12}}>
+          <span style={{fontFamily:"Oswald",fontSize:8,letterSpacing:".5em",color:"#c87020",textTransform:"uppercase"}}>Catalyst</span>
+          <span style={{fontFamily:"Oswald",fontSize:20,fontWeight:700,letterSpacing:".03em",color:"#e0eaf4"}}>GOV CONTRACTS</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          {lastUpdated&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#2a3a48"}}>{lastUpdated.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>}
+          <button onClick={refresh}
+            style={{background:"transparent",border:"1px solid #1a2030",color:"#8090a0",padding:"5px 12px",fontFamily:"'DM Mono'",fontSize:10,cursor:"pointer",letterSpacing:".07em",borderRadius:1}}>
+            ↻ REFRESH
+          </button>
+        </div>
+      </header>
+
+      {/* TICKER TABS */}
+      <div style={{borderBottom:"1px solid #0f1520",padding:"0 24px",display:"flex",gap:4,overflowX:"auto"}}>
+        {WATCHLIST.map((c,i)=>(
+          <button key={c.ticker} className={`tab${activeIdx===i?" active":""}`}
+            onClick={()=>setActiveIdx(i)}
+            style={{color:activeIdx===i?c.color:"#4a6070",borderColor:activeIdx===i?c.color+"40":"transparent",borderBottom:activeIdx===i?`2px solid ${c.color}`:"2px solid transparent",borderRadius:0,padding:"10px 16px"}}>
+            {c.ticker}
+            {data[c.ticker]&&<span style={{marginLeft:6,fontFamily:"'DM Mono'",fontSize:9,color:activeIdx===i?c.color:"#2a3a48"}}>{data[c.ticker].length}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* COMPANY NAME */}
+      <div style={{padding:"14px 24px 0",display:"flex",alignItems:"baseline",gap:10}}>
+        <span style={{fontFamily:"Oswald",fontSize:18,color:company.color,letterSpacing:".04em"}}>{company.ticker}</span>
+        <span style={{fontSize:12,color:"#3a5060"}}>{company.name}</span>
+      </div>
+
+      {/* CONTENT */}
+      <main style={{maxWidth:900,padding:"14px 24px 60px"}}>
+        <TickerPanel
+          company={company}
+          contracts={contracts}
+          totals={tots}
+          loading={isLoading}
+          error={error}
+        />
+      </main>
+
+      {/* FOOTER */}
+      <div style={{padding:"0 24px 24px",fontFamily:"'DM Mono'",fontSize:9,color:"#1a2a38",letterSpacing:".08em",textTransform:"uppercase"}}>
+        Source: USASpending.gov · Federal contract awards only · Data may lag 30–90 days
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
