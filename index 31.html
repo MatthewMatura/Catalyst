@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Catalyst — Insider Trades</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@700&family=DM+Sans:wght@400;500&family=DM+Mono:wght@400&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#08090d;color:#e0eaf4;font-family:'DM Sans',sans-serif;min-height:100vh;}
+    .card{background:#0d1117;border:1px solid #1a2030;transition:border-color .15s;margin-bottom:3px;border-radius:1px;cursor:pointer;}
+    .card:hover{border-color:#253040;}
+    .fade{animation:fi .18s ease;}
+    @keyframes fi{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+    .spin{animation:sp 1s linear infinite;}
+    @keyframes sp{to{transform:rotate(360deg)}}
+    .btn{background:transparent;border:1px solid #1a2030;color:#8090a0;padding:5px 12px;font-family:'DM Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.07em;border-radius:1px;}
+    .btn:hover{border-color:#3a5060;color:#c0d0e0;}
+    .btn.active{border-color:#e8a020;color:#e8a020;}
+    input{background:#0d1117;border:1px solid #1a2030;color:#e0eaf4;padding:6px 10px;font-family:'DM Mono',monospace;font-size:11px;border-radius:1px;outline:none;width:100%;}
+    input:focus{border-color:#3a5060;}
+    ::-webkit-scrollbar{height:3px;width:3px;}
+    ::-webkit-scrollbar-track{background:#08090d;}
+    ::-webkit-scrollbar-thumb{background:#1a2030;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const STORAGE_KEY   = "catalyst_insider_v2";
+const WATCHLIST_KEY = "catalyst_insider_wl_v2";
+
+const DEFAULT_WATCHLIST = [
+  { ticker:"PLTR", name:"Palantir",  cik:"0001321655", color:"#a374e8" },
+  { ticker:"NVDA", name:"NVIDIA",    cik:"0001045810", color:"#76b900" },
+  { ticker:"AMZN", name:"Amazon",    cik:"0001018724", color:"#ff9900" },
+  { ticker:"META", name:"Meta",      cik:"0001326801", color:"#4a90e2" },
+  { ticker:"ISRG", name:"Intuitive", cik:"0001035267", color:"#5ac8fa" },
+  { ticker:"RTX",  name:"RTX",       cik:"0000101829", color:"#c87020" },
+  { ticker:"JPM",  name:"JPMorgan",  cik:"0000019617", color:"#60a5fa" },
+];
+
+function loadStorage(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+}
+function saveStorage(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+function fmt$(n) {
+  if (!n||n===0) return "";
+  if (n>=1e9) return `$${(n/1e9).toFixed(2)}B`;
+  if (n>=1e6) return `$${(n/1e6).toFixed(1)}M`;
+  if (n>=1e3) return `$${(n/1e3).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+}
+function fmtDate(s) {
+  if (!s) return "";
+  try { return new Date(s).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); }
+  catch { return s; }
+}
+function timeAgo(s) {
+  if (!s) return "";
+  const d = Math.floor((Date.now()-new Date(s))/86400000);
+  if (d===0) return "Today";
+  if (d===1) return "Yesterday";
+  if (d<7)   return `${d}d ago`;
+  if (d<30)  return `${Math.floor(d/7)}w ago`;
+  return `${Math.floor(d/30)}mo ago`;
+}
+
+// Fetch Form 4 XML and extract trade data
+async function fetchForm4(cikNum, accFmt, doc) {
+  const url = `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accFmt}/${doc}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status}`);
+  const text = await r.text();
+  const xml = new DOMParser().parseFromString(text, "text/xml");
+
+  const name  = xml.querySelector("rptOwnerName")?.textContent?.trim() || "Insider";
+  const title = xml.querySelector("officerTitle")?.textContent?.trim() || "";
+  const isDir = xml.querySelector("isDirector")?.textContent?.trim() === "1";
+  const isOff = xml.querySelector("isOfficer")?.textContent?.trim() === "1";
+  const role  = title || (isDir?"Director":isOff?"Officer":"Insider");
+
+  const txns = [...xml.querySelectorAll("nonDerivativeTransaction")].map(t=>{
+    const code   = t.querySelector("transactionAcquiredDisposedCode value")?.textContent?.trim();
+    const shares = parseFloat(t.querySelector("transactionShares value")?.textContent||"0");
+    const price  = parseFloat(t.querySelector("transactionPricePerShare value")?.textContent||"0");
+    const value  = shares*price;
+    return {
+      action: code==="D"?"SELL":"BUY",
+      shares, price, value,
+      sharesStr: shares.toLocaleString("en-US",{maximumFractionDigits:0}),
+      priceStr:  price>0?`$${price.toFixed(2)}`:"",
+      valueStr:  value>1000?fmt$(value):"",
+    };
+  });
+
+  if (!txns.length) return null;
+
+  const post = xml.querySelector("sharesOwnedFollowingTransaction value")?.textContent;
+  const postShares = post?parseFloat(post).toLocaleString():null;
+  const totalBuy   = txns.filter(t=>t.action==="BUY").reduce((s,t)=>s+t.value,0);
+  const totalSell  = txns.filter(t=>t.action==="SELL").reduce((s,t)=>s+t.value,0);
+  const side       = totalSell>totalBuy?"SELL":"BUY";
+
+  return {name,role,txns,postShares,side,totalBuy,totalSell,url};
+}
+
+// Load all Form 4s for a company, parse them, return trade objects
+async function loadCompanyTrades(company) {
+  try {
+    const r = await fetch(`https://data.sec.gov/submissions/CIK${company.cik}.json`);
+    const d = await r.json();
+    const rec = d.filings?.recent;
+    if (!rec) return [];
+
+    const cikNum = company.cik.replace(/^0+/,"");
+    const toFetch = [];
+    const n = Math.min(rec.accessionNumber?.length||0,80);
+
+    for (let i=0;i<n;i++) {
+      const form = rec.form[i];
+      if (form!=="4"&&form!=="4/A") continue;
+      if (toFetch.length>=6) break;
+      toFetch.push({
+        date:   rec.filingDate[i],
+        acc:    rec.accessionNumber[i],
+        accFmt: rec.accessionNumber[i].replace(/-/g,""),
+        doc:    rec.primaryDocument[i],
+      });
+    }
+
+    const results = await Promise.allSettled(
+      toFetch.map(async f=>{
+        const detail = await fetchForm4(cikNum, f.accFmt, f.doc);
+        if (!detail) return null;
+        return {
+          key:     `${company.ticker}-${f.acc}`,
+          date:    f.date,
+          acc:     f.acc,
+          company,
+          detail,
+        };
+      })
+    );
+
+    return results
+      .filter(r=>r.status==="fulfilled"&&r.value)
+      .map(r=>r.value);
+  } catch { return []; }
+}
+
+// ── WATCHLIST MANAGER ───────────────────────────────────────────────────────
+function WatchlistManager({watchlist, onSave, onClose}) {
+  const [items, setItems]   = useState(watchlist);
+  const [ticker, setTicker] = useState("");
+  const [name, setName]     = useState("");
+  const [cik, setCik]       = useState("");
+  const [msg, setMsg]       = useState("");
+
+  const lookup = async () => {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return;
+    setMsg("Looking up…");
+    try {
+      const r = await fetch(`https://www.sec.gov/cgi-bin/browse-edgar?company=&CIK=${t}&type=4&dateb=&owner=include&count=5&search_text=&action=getcompany&output=atom`);
+      const text = await r.text();
+      const xml = new DOMParser().parseFromString(text,"text/xml");
+      const entry = xml.querySelector("entry");
+      if (entry) {
+        setName(entry.querySelector("company-name")?.textContent||t);
+        setCik((entry.querySelector("CIK")?.textContent||"").padStart(10,"0"));
+        setMsg("✓ Found");
+      } else { setMsg("Not found — enter CIK manually from sec.gov"); }
+    } catch { setMsg("Lookup failed"); }
+  };
+
+  const add = () => {
+    const t=ticker.trim().toUpperCase(), n=name.trim(), c=cik.trim().padStart(10,"0");
+    if (!t||!n||c==="0000000000") { setMsg("Need ticker, name, and CIK"); return; }
+    if (items.find(i=>i.ticker===t)) { setMsg("Already in watchlist"); return; }
+    const colors=["#a374e8","#76b900","#4a90e2","#ff9900","#c87020","#ff6b9d","#5ac8fa","#00e5a0"];
+    setItems(p=>[...p,{ticker:t,name:n,cik:c,color:colors[p.length%colors.length]}]);
+    setTicker(""); setName(""); setCik(""); setMsg("");
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#0d1117",border:"1px solid #1a2030",borderRadius:2,padding:24,width:"100%",maxWidth:400}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <span style={{fontFamily:"Oswald",fontSize:14,letterSpacing:".15em",color:"#e0eaf4"}}>WATCHLIST</span>
+          <button className="btn" onClick={onClose}>CLOSE</button>
+        </div>
+        <div style={{marginBottom:16}}>
+          {items.map(w=>(
+            <div key={w.ticker} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #0f1520"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:w.color}}/>
+                <span style={{fontFamily:"'DM Mono'",fontSize:12,color:w.color}}>{w.ticker}</span>
+                <span style={{fontSize:12,color:"#607080"}}>{w.name}</span>
+              </div>
+              <button className="btn" onClick={()=>setItems(p=>p.filter(i=>i.ticker!==w.ticker))}
+                style={{padding:"2px 8px",fontSize:9,color:"#ff3057",borderColor:"#ff305730"}}>✕</button>
+            </div>
+          ))}
+        </div>
+        <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase",marginBottom:8}}>Add Ticker</div>
+        <div style={{display:"flex",gap:6,marginBottom:6}}>
+          <input value={ticker} onChange={e=>setTicker(e.target.value.toUpperCase())} placeholder="TICKER" onKeyDown={e=>e.key==="Enter"&&lookup()}/>
+          <button className="btn" onClick={lookup} style={{whiteSpace:"nowrap",borderColor:"#3a5060",color:"#a0b8c8"}}>LOOKUP</button>
+        </div>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="Company name" style={{marginBottom:6}}/>
+        <input value={cik} onChange={e=>setCik(e.target.value)} placeholder="CIK (10 digits)" style={{marginBottom:8}}/>
+        {msg&&<div style={{fontFamily:"'DM Mono'",fontSize:10,color:msg.startsWith("✓")?"#00e5a0":"#8090a0",marginBottom:8}}>{msg}</div>}
+        <button className="btn" onClick={add} style={{width:"100%",padding:"7px",marginBottom:12,borderColor:"#3a5060",color:"#a0b8c8"}}>+ ADD</button>
+        <button className="btn" onClick={()=>onSave(items)} style={{width:"100%",padding:"8px",borderColor:"#e8a020",color:"#e8a020",fontSize:11}}>SAVE WATCHLIST</button>
+      </div>
+    </div>
+  );
+}
+
+// ── TRADE CARD ──────────────────────────────────────────────────────────────
+function TradeCard({trade, isNew}) {
+  const [open, setOpen] = useState(false);
+  const {company,date,detail} = trade;
+  const {name,role,txns,postShares,side,totalBuy,totalSell} = detail;
+  const isBuy     = side==="BUY";
+  const sideColor = isBuy?"#00e5a0":"#ff3057";
+  const accent    = isNew?"#e8a020":sideColor;
+  const total     = isBuy?totalBuy:totalSell;
+
+  return (
+    <div className="card fade" onClick={()=>setOpen(o=>!o)} style={{borderLeft:`2px solid ${accent}`}}>
+      <div style={{padding:"11px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+          <div style={{flex:1,minWidth:0}}>
+            {isNew&&<span style={{fontFamily:"'DM Mono'",fontSize:9,color:"#e8a020",background:"#e8a02015",border:"1px solid #e8a02040",padding:"2px 7px",borderRadius:2,display:"inline-block",marginBottom:5}}>● NEW</span>}
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+              <span style={{fontFamily:"'DM Mono'",fontSize:11,color:company.color,fontWeight:500}}>{company.ticker}</span>
+              <span style={{fontSize:13,fontWeight:500,color:"#dce8f4"}}>{name}</span>
+            </div>
+            <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#4a6070"}}>{role} · {timeAgo(date)}</div>
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            <div style={{fontFamily:"'DM Mono'",fontSize:11,color:sideColor,fontWeight:500}}>{side}</div>
+            {total>0&&<div style={{fontFamily:"'DM Mono'",fontSize:12,color:"#c0d0e0"}}>{fmt$(total)}</div>}
+            <div style={{fontSize:10,color:"#283848",marginTop:3,transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▾</div>
+          </div>
+        </div>
+
+        {open&&(
+          <div className="fade" onClick={e=>e.stopPropagation()} style={{marginTop:12,paddingTop:12,borderTop:"1px solid #0f1520"}}>
+            <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase",marginBottom:8}}>Transactions</div>
+            {txns.map((t,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 10px",background:"#06080d",border:"1px solid #0f1520",borderRadius:2,marginBottom:3}}>
+                <span style={{fontFamily:"'DM Mono'",fontSize:11,color:t.action==="SELL"?"#ff3057":"#00e5a0",fontWeight:500,flexShrink:0}}>{t.action}</span>
+                <span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#c0d0e0"}}>{t.sharesStr} shares</span>
+                {t.priceStr&&<span style={{fontFamily:"'DM Mono'",fontSize:11,color:"#8090a0"}}>@ {t.priceStr}</span>}
+                {t.valueStr&&<span style={{fontFamily:"'DM Mono'",fontSize:12,color:"#c0d0e0",marginLeft:"auto"}}>{t.valueStr}</span>}
+              </div>
+            ))}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:12,marginBottom:12}}>
+              {[["Filed",fmtDate(date)],["Role",role||"—"],["Holds After",postShares||"—"]].map(([l,v])=>(
+                <div key={l}>
+                  <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase",marginBottom:3}}>{l}</div>
+                  <div style={{fontSize:12,color:"#a0b8c8"}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{padding:"8px 10px",background:"#06080d",border:`1px solid ${sideColor}20`,borderRadius:2,marginBottom:12,display:"flex",gap:8}}>
+              <span style={{color:sideColor,fontFamily:"'DM Mono'",fontSize:10,flexShrink:0}}>{isBuy?"▲":"▼"}</span>
+              <span style={{fontSize:12,color:"#506070",lineHeight:1.5}}>
+                {isBuy?`${name} bought ${company.ticker} — insider buying signals conviction from someone with direct knowledge of company performance.`
+                      :`${name} sold ${company.ticker} — insider selling can indicate profit-taking or reduced near-term conviction.`}
+              </span>
+            </div>
+            <a href={detail.url} target="_blank" rel="noopener noreferrer"
+              style={{fontFamily:"'DM Mono'",fontSize:10,color:"#4a90e2",border:"1px solid #1a3060",padding:"4px 10px",borderRadius:2,display:"inline-block"}}>
+              View Form 4 on SEC →
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN APP ────────────────────────────────────────────────────────────────
+function App() {
+  const [watchlist, setWatchlist]       = useState(()=>loadStorage(WATCHLIST_KEY, DEFAULT_WATCHLIST));
+  const [showWL, setShowWL]             = useState(false);
+  const [trades, setTrades]             = useState([]);
+  const [newKeys, setNewKeys]           = useState(new Set());
+  const [loading, setLoading]           = useState(true);
+  const [loadMsg, setLoadMsg]           = useState("Loading…");
+  const [tickerFilter, setTickerFilter] = useState("ALL");
+  const [sideFilter, setSideFilter]     = useState("ALL");
+  const [showOnlyNew, setShowOnlyNew]   = useState(false);
+  const [lastChecked, setLastChecked]   = useState(null);
+
+  const load = useCallback(async (wl) => {
+    const list = wl||watchlist;
+    setLoading(true); setTrades([]); setTickerFilter("ALL"); setSideFilter("ALL"); setShowOnlyNew(false);
+    const prev = loadStorage(STORAGE_KEY,{keys:[],time:null});
+    const all = [];
+
+    for (const company of list) {
+      setLoadMsg(`Loading ${company.ticker}…`);
+      const results = await loadCompanyTrades(company);
+      results.forEach(t=>all.push(t));
+    }
+
+    all.sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const prevKeys = new Set(prev.keys||[]);
+    const currentKeys = all.map(t=>t.key);
+    const fresh = new Set(currentKeys.filter(k=>!prevKeys.has(k)));
+
+    saveStorage(STORAGE_KEY,{keys:currentKeys,time:Date.now()});
+    setTrades(all);
+    setNewKeys(fresh);
+    setLastChecked(prev.time?new Date(prev.time):null);
+    setLoading(false);
+  },[watchlist]);
+
+  useEffect(()=>{load();},[]);
+
+  const saveWatchlist = wl => {
+    setWatchlist(wl);
+    saveStorage(WATCHLIST_KEY,wl);
+    setShowWL(false);
+    load(wl);
+  };
+
+  let visible = trades;
+  if (tickerFilter!=="ALL") visible=visible.filter(t=>t.company.ticker===tickerFilter);
+  if (sideFilter!=="ALL")   visible=visible.filter(t=>t.detail.side===sideFilter);
+  if (showOnlyNew)          visible=visible.filter(t=>newKeys.has(t.key));
+
+  const buyCount  = trades.filter(t=>t.detail.side==="BUY").length;
+  const sellCount = trades.filter(t=>t.detail.side==="SELL").length;
+  const totalNew  = newKeys.size;
+
+  return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+      {showWL&&<WatchlistManager watchlist={watchlist} onSave={saveWatchlist} onClose={()=>setShowWL(false)}/>}
+
+      <header style={{borderBottom:"1px solid #0f1520",padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,position:"sticky",top:0,background:"#08090d",zIndex:100}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:12}}>
+          <span style={{fontFamily:"Oswald",fontSize:8,letterSpacing:".5em",color:"#c87020",textTransform:"uppercase"}}>Catalyst</span>
+          <span style={{fontFamily:"Oswald",fontSize:20,fontWeight:700,color:"#e0eaf4",letterSpacing:".03em"}}>INSIDER TRADES</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {!loading&&totalNew>0&&<span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#e8a020",background:"#e8a02015",border:"1px solid #e8a02040",padding:"3px 8px",borderRadius:2}}>{totalNew} new</span>}
+          <button className="btn" onClick={()=>setShowWL(true)}>WATCHLIST</button>
+          <button className="btn" onClick={()=>load()} disabled={loading}>{loading?"…":"↻"}</button>
+        </div>
+      </header>
+
+      {!loading&&(
+        <div style={{borderBottom:"1px solid #0f1520",padding:"8px 20px",display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          {[{v:"ALL",l:"ALL"},{v:"BUY",l:`▲ BUY (${buyCount})`},{v:"SELL",l:`▼ SELL (${sellCount})`}].map(({v,l})=>(
+            <button key={v} className={`btn${sideFilter===v?" active":""}`} onClick={()=>setSideFilter(v)}
+              style={{borderColor:sideFilter===v?v==="BUY"?"#00e5a0":v==="SELL"?"#ff3057":"#e8a020":"#1a2030",color:sideFilter===v?v==="BUY"?"#00e5a0":v==="SELL"?"#ff3057":"#e8a020":"#8090a0"}}>{l}</button>
+          ))}
+          {totalNew>0&&<button className={`btn${showOnlyNew?" active":""}`} onClick={()=>setShowOnlyNew(v=>!v)} style={{borderColor:showOnlyNew?"#e8a020":"#1a2030",color:showOnlyNew?"#e8a020":"#8090a0"}}>● NEW ({totalNew})</button>}
+          <div style={{width:1,height:14,background:"#1a2030",margin:"0 2px"}}/>
+          <button className={`btn${tickerFilter==="ALL"?" active":""}`} onClick={()=>setTickerFilter("ALL")}>ALL</button>
+          {watchlist.map(w=>{
+            const count=trades.filter(t=>t.company.ticker===w.ticker).length;
+            const hasNew=trades.some(t=>t.company.ticker===w.ticker&&newKeys.has(t.key));
+            return (
+              <button key={w.ticker} className={`btn${tickerFilter===w.ticker?" active":""}`} onClick={()=>setTickerFilter(w.ticker)}
+                style={{borderColor:tickerFilter===w.ticker?w.color:"#1a2030",color:tickerFilter===w.ticker?w.color:"#8090a0"}}>
+                {w.ticker}{hasNew&&<span style={{marginLeft:4,color:"#e8a020"}}>●</span>}
+                {count>0&&<span style={{marginLeft:4,color:"#3a5060",fontSize:9}}>{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {!loading&&(
+        <div style={{padding:"8px 20px",display:"flex",gap:20,borderBottom:"1px solid #0f1520",flexWrap:"wrap"}}>
+          {[["Showing",`${visible.length} filings`],["Buys",buyCount,"#00e5a0"],["Sells",sellCount,"#ff3057"],
+            lastChecked?["Last Checked",lastChecked.toLocaleDateString("en-US",{month:"short",day:"numeric"})]:null
+          ].filter(Boolean).map(([l,v,c])=>(
+            <div key={l}>
+              <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#3a5060",letterSpacing:".1em",textTransform:"uppercase",marginBottom:2}}>{l}</div>
+              <div style={{fontFamily:"'DM Mono'",fontSize:12,color:c||"#c0d0e0"}}>{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <main style={{padding:"12px 20px 60px",flex:1,maxWidth:900}}>
+        {loading&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"100px 0",gap:14}}>
+            <div className="spin" style={{width:16,height:16,border:"2px solid #0f1520",borderTopColor:"#c87020",borderRadius:"50%"}}/>
+            <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#3a5060",letterSpacing:".1em"}}>{loadMsg}</span>
+          </div>
+        )}
+        {!loading&&visible.length===0&&(
+          <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#2a3a48",padding:"60px 0",textAlign:"center"}}>NO TRADES MATCH</div>
+        )}
+        {!loading&&visible.map((t,i)=>(
+          <TradeCard key={t.key||i} trade={t} isNew={newKeys.has(t.key)}/>
+        ))}
+      </main>
+
+      <div style={{padding:"0 20px 16px",fontFamily:"'DM Mono'",fontSize:9,color:"#1a2a38",letterSpacing:".08em",textTransform:"uppercase"}}>
+        Source: SEC EDGAR Form 4 · {trades.length} filings · Sorted newest first
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
